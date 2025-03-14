@@ -19,7 +19,11 @@ def plot_phase(param, filename="JB-Results(12).txt"):
         "rho3": 8,
         "rho4": 9,
         "|psi|_avg": 10,
-        "avg_phase_diff": 11
+        "avg_phase_diff": 11,
+        "phase1": 12,
+        "phase2": 13,
+        "phase3": 14,
+        "phase4": 15
     }
     
     if param not in param_dict:
@@ -50,8 +54,8 @@ def plot_phase(param, filename="JB-Results(12).txt"):
 
 if __name__ == '__main__':
     # Ajusta el nombre del archivo si es necesario
-    input_filename = "./Resultados/JB-Results(2).txt"
+    input_filename = "./Resultados/JB-Results(7).txt"
     
     # Ejemplos de gráficas: campo superfluido promedio y diferencia de fases
-    plot_phase("|psi|_avg", filename=input_filename)
-    plot_phase("avg_phase_diff", filename=input_filename)
+    plot_phase("phase2", filename=input_filename)
+    plot_phase("phase1", filename=input_filename)
