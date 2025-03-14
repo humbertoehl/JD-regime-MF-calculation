@@ -92,77 +92,59 @@ def run_mean_field(initial_conditions, params, b, b_dag, n_op, I, tol=1e-5, max_
     return final_params, total_energy
 
 # --------------------------------------------------------------------
-# Función para calcular un único punto de la grilla.
-# Si se proporciona 'warm_start', se usa esa condición inicial; de lo contrario se explora el espacio de condiciones.
-def compute_single_point(mu_val, zt_val, base_params, b, b_dag, n_op, I, tol, max_iter,
-                         psi_vals_e=None, psi_vals_o=None, rho_vals=None, warm_start=None):
+# Función que para un punto (mu, zt) realiza la búsqueda exhaustiva sobre las condiciones iniciales
+def compute_point_exhaustive(mu_val, zt_val, base_params, psi_vals_e, psi_vals_o, rho_vals,
+                             b, b_dag, n_op, I, tol, max_iter):
     params_local = base_params.copy()
     params_local['mu'] = mu_val
     params_local['t0'] = zt_val / params_local['z']
     
-    if warm_start is not None:
-        init_cond = warm_start
-        sol, energy = run_mean_field(init_cond, params_local, b, b_dag, n_op, I, tol, max_iter)
-        best_solution = sol
-        best_energy = energy
-        best_cond = init_cond
-    else:
-        best_energy = np.inf
-        best_solution = None
-        best_cond = None
-        for psi_o_init in psi_vals_o:
-            for psi_e_init in psi_vals_e:
-                for rho_o_init in rho_vals:
-                    for rho_e_init in rho_vals:
-                        if rho_o_init == rho_e_init:
-                            continue
-                        init_cond = {
-                            'psi_o': psi_o_init,
-                            'psi_e': psi_e_init,
-                            'rho_o': rho_o_init,
-                            'rho_e': rho_e_init
-                        }
-                        sol, energy = run_mean_field(init_cond, params_local, b, b_dag, n_op, I, tol, max_iter)
-                        if energy < best_energy:
-                            best_energy = energy
-                            best_solution = sol.copy()
-                            best_cond = init_cond.copy()
+    best_energy = np.inf
+    best_solution = None
+    best_cond = None
+    for psi_o_init in psi_vals_o:
+        for psi_e_init in psi_vals_e:
+            for rho_o_init in rho_vals:
+                for rho_e_init in rho_vals:
+                    if rho_o_init == rho_e_init:
+                        continue
+                    init_cond = {
+                        'psi_o': psi_o_init,
+                        'psi_e': psi_e_init,
+                        'rho_o': rho_o_init,
+                        'rho_e': rho_e_init
+                    }
+                    sol, energy = run_mean_field(init_cond, params_local, b, b_dag, n_op, I, tol, max_iter)
+                    if energy < best_energy:
+                        best_energy = energy
+                        best_solution = sol.copy()
+                        best_cond = init_cond.copy()
     psi_total = (np.abs(best_solution['psi_o']) + np.abs(best_solution['psi_e'])) / 2.0
-    delta_rho = np.abs(best_solution['rho_o'] - best_solution['rho_e']) / 2.0
-    print(f'done for {zt_val}-{mu_val}')
+    delta_rho = abs(best_solution['rho_o'] - best_solution['rho_e']) / 2.0
     return (mu_val, zt_val, best_solution['psi_o'], best_solution['psi_e'],
             best_solution['rho_o'], best_solution['rho_e'], psi_total, delta_rho, best_cond)
 
 # --------------------------------------------------------------------
-# Para cada fila (valor de μ), se recorre la lista de zt de forma secuencial, usando warm start.
-def compute_mu_row(mu_val, zt_vals, base_params, psi_vals_e, psi_vals_o, rho_vals, b, b_dag, n_op, I, tol, max_iter):
+# Para cada fila (valor de μ) se recorre la lista de zt de forma secuencial (búsqueda exhaustiva en cada punto)
+def compute_mu_row(mu_val, zt_vals, base_params, psi_vals_e, psi_vals_o, rho_vals,
+                   b, b_dag, n_op, I, tol, max_iter):
     row_results = []
-    warm_start = None  # Condición inicial para el primer punto
-    for idx, zt_val in enumerate(zt_vals):
-        if idx == 0:
-            result = compute_single_point(mu_val, zt_val, base_params, b, b_dag, n_op, I, tol, max_iter,
-                                          psi_vals_e=psi_vals_e, psi_vals_o=psi_vals_o, rho_vals=rho_vals,
-                                          warm_start=None)
-        else:
-            # Uso de la solución anterior como condición inicial
-            result = compute_single_point(mu_val, zt_val, base_params, b, b_dag, n_op, I, tol, max_iter,
-                                          warm_start=warm_start)
+    for zt_val in zt_vals:
+        result = compute_point_exhaustive(mu_val, zt_val, base_params, psi_vals_e, psi_vals_o,
+                                          rho_vals, b, b_dag, n_op, I, tol, max_iter)
         row_results.append(result)
-        # Actualizar el warm start con la mejor condición encontrada en este punto
-        _, _, _, _, _, _, _, _, best_cond = result
-        warm_start = best_cond
     return row_results
 
 # --------------------------------------------------------------------
-# Barrido de la grilla en paralelo, paralelizando por cada fila (valor de μ).
+# Barrido de la grilla en paralelo, paralelizando por cada fila (valor de μ)
 def sweep_phase_diagram_parallel(mu_vals, zt_vals, base_params, b, b_dag, n_op, I,
                                  psi_vals_e, psi_vals_o, rho_vals, tol=1e-5, max_iter=150):
     args_list = []
     for mu_val in mu_vals:
-        args_list.append((mu_val, zt_vals, base_params, psi_vals_e, psi_vals_o, rho_vals, b, b_dag, n_op, I, tol, max_iter))
+        args_list.append((mu_val, zt_vals, base_params, psi_vals_e, psi_vals_o,
+                          rho_vals, b, b_dag, n_op, I, tol, max_iter))
     
     pool = Pool(processes=min(cpu_count(), len(mu_vals)))
-    # Usamos starmap para pasar argumentos a compute_mu_row
     results = pool.starmap(compute_mu_row, args_list)
     pool.close()
     pool.join()
@@ -198,15 +180,16 @@ if __name__ == '__main__':
     mu_vals = np.linspace(0.5, 1.4, N_mu)
     zt_vals = np.linspace(0.05, 0.17, N_zt)
     
-    # Conjuntos de condiciones iniciales (usados solo para el primer punto de cada fila)
+    # Conjuntos de condiciones iniciales (mismos que en el código original)
     psi_vals_e = [0.1, 0.01, 0.001, 0.5]
     psi_vals_o = [0.2, 0.02, 0.002, 0.6]
     rho_vals = [0, 0.2, 0.4, 0.6, 0.8]
     
-    # Ejecutar el barrido en paralelo (por filas)
+    # Ejecutar el barrido en paralelo (por filas de μ)
     start = time.time()
-    data_rows = sweep_phase_diagram_parallel(mu_vals, zt_vals, base_params, b, b_dag, n_op, I,
-                                               psi_vals_e, psi_vals_o, rho_vals, tol=1e-5, max_iter=150)
+    data_rows = sweep_phase_diagram_parallel(mu_vals, zt_vals, base_params, b, b_dag,
+                                               n_op, I, psi_vals_e, psi_vals_o, rho_vals,
+                                               tol=1e-5, max_iter=150)
     end = time.time()
     sec = end - start
     mins = sec // 60
@@ -215,9 +198,9 @@ if __name__ == '__main__':
     mins = mins % 60
 
     # Guardar Resultados en un archivo
-    output_filename = "JD-Results(12)_optimized.txt"
+    output_filename = "JD-Results(12)_optimized_same.txt"
     with open(output_filename, "w") as f:
-        f.write("# Resultados del barrido de la grilla en (mu, zt/U) (versión optimizada)\n")
+        f.write("# Resultados del barrido de la grilla en (mu, zt/U) (versión optimizada, misma búsqueda exhaustiva)\n")
         f.write("# Columnas: mu, zt/U, psi_o, psi_e, rho_o, rho_e, psi_total, delta_rho\n")
         f.write("# Metadatos:\n")
         f.write(f"# base_params: {base_params}\n")
@@ -232,4 +215,4 @@ if __name__ == '__main__':
             f.write("\t".join([f"{x:.6f}" for x in row]) + "\n")
     
     print(f"Archivo de resultados guardado en: {output_filename}")
-    print(f"# Tiempo de ejecución: {int(hours)}:{int(mins)}:{sec:.2f}")
+    print(f"Tiempo de ejecución: {int(hours)}:{int(mins)}:{sec:.2f}")
