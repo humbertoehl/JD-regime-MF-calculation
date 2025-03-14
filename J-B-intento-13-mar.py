@@ -188,7 +188,7 @@ def sweep_phase_diagram_parallel_bond(mu_vals, zt_vals, base_params, b, b_dag, b
         (mu_val, zt_val, psi1, psi2, psi3, psi4, rho1, rho2, rho3, rho4, avg_psi, phase_diff) = res
         # CORRECIÓN PA DESPUÉS: GUARDAR CADA FASE POR SEPARADO, NO SOLO EL PROMEDIO
         avg_phase_diff = np.mean(np.abs(phase_diff))
-        data_rows.append([mu_val, zt_val, psi1, psi2, psi3, psi4, rho1, rho2, rho3, rho4, avg_psi, avg_phase_diff])
+        data_rows.append([mu_val, zt_val, psi1, psi2, psi3, psi4, rho1, rho2, rho3, rho4, avg_psi, avg_phase_diff, phase_diff[0], phase_diff[1], phase_diff[2], phase_diff[3]])
     
     return data_rows
 
@@ -197,7 +197,7 @@ if __name__ == '__main__':
 
     base_params = {
         'U': 1.0,
-        'J_B': 0.0,  # Acoplamiento bond
+        'J_B': 1.0,  # Acoplamiento bond
         'N_s': 100,
         'z': 6,
         'mu': 0.5,       # Se actualiza
@@ -206,21 +206,22 @@ if __name__ == '__main__':
     base_params['g_eff'] = -0.5 * base_params['U'] / base_params['N_s']  
     
 
-    dim = 6
+    dim = 12
     b, b_dag, b2, b2_dag, n_op, I = create_fock_operators_extended(dim)
     
     # Grilla de parámetros
-    N_mu = 30
-    N_zt = 30
+    N_mu = 5
+    N_zt = 5
     mu_vals = np.linspace(0, 4, N_mu)
     zt_vals = np.linspace(0, 1, N_zt)
     
     # Conjuntos de condiciones iniciales
     psi_candidates = [
-        [0.1, 0.1, 0.1, 0.1],
-        [0.1, 0.1*np.exp(1j*0.5), 0.1, 0.1*np.exp(1j*0.5)],
-        [0.1, 0.1*np.exp(-1j*0.5), 0.1, 0.1*np.exp(-1j*0.5)],
-        [0.1, 0.1*np.exp(1j*0.5), 0.1*np.exp(1j*1.0), 0.1*np.exp(1j*1.5)]
+        [0.101+0j, 0.102+0j, 0.103+0j,     0.104+0j],     
+        [0.101+0j, 0.102+0j, 0.103*np.exp(1j*.2),     0.104*np.exp(1j*.2)],  
+        [0.101+0j, 0.102+0j, 0.103*np.exp(1j*.5),     0.104*np.exp(1j*.5)],  
+        [0.101+0j, 0.102+0j, 0.103*np.exp(1j*.8),     0.104*np.exp(1j*.8)],   
+
     ]
     rho_candidates = [
         [0.5, 0.5, 0.5, 0.5],
@@ -239,10 +240,10 @@ if __name__ == '__main__':
     print(f"Tiempo de ejecución: {time_of_execution:.2f} min")
     
     # Guardar resultados
-    output_filename = "JB-Results(1).txt"
+    output_filename = "JB-Results(7).txt"
     with open(output_filename, "w") as f:
         f.write("# Resultados del barrido en (mu, zt/U) para régimen bond (J_B≠0, J_D=0)\n")
-        f.write("# Columnas: mu, zt/U, psi1, psi2, psi3, psi4, rho1, rho2, rho3, rho4, |psi|_avg, avg_phase_diff\n")
+        f.write("# Columnas: mu, zt/U, psi1, psi2, psi3, psi4, rho1, rho2, rho3, rho4, |psi|_avg, avg_phase_diff, phase1, phase2, phase3, phase4\n")
         f.write("# Metadatos:\n")
         f.write(f"# base_params: {base_params}\n")
         f.write(f"# dim: {dim}\n")
@@ -250,14 +251,14 @@ if __name__ == '__main__':
         f.write(f"# rho_candidates: {rho_candidates}\n")
         f.write(f"# Tiempo de ejecución: {time_of_execution:.2f} min\n")
         f.write("#\n")
-        f.write("#mu\tzt/U\tpsi1\tpsi2\tpsi3\tpsi4\trho1\trho2\trho3\trho4\t|psi|_avg\tavg_phase_diff\n")
+        f.write("#mu\tzt/U\tpsi1\tpsi2\tpsi3\tpsi4\trho1\trho2\trho3\trho4\t|psi|_avg\tavg_phase_diff\tphase1\tphase2\tphase3\tphase4\n")
         for row in data_rows:
             # Para los parámetros complejos tomo el valor absoluto
             psi_vals = [np.abs(row[i]) if i < 6 and i>=2 else row[i] for i in range(2,6)]
             line = "\t".join([f"{x:.6f}" if isinstance(x, float) else str(x) for x in row[:2]] +
                              [f"{val:.6f}" for val in psi_vals] +
                              [f"{x:.6f}" for x in row[6:10]] +
-                             [f"{row[10]:.6f}", f"{row[11]:.6f}"])
+                             [f"{row[10]:.6f}", f"{row[11]:.6f}", f"{row[12]:.6f}", f"{row[13]:.6f}", f"{row[14]:.6f}", f"{row[15]:.6f}"])
             f.write(line + "\n")
     
     print(f"Archivo de resultados guardado en: {output_filename}")
