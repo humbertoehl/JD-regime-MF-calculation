@@ -7,6 +7,13 @@ from concurrent.futures import ProcessPoolExecutor
 from functools import partial
 
 # ---------------------------- FUNCIONES AUXILIARES ----------------------------
+def partial_time(t_start, t_end):
+    sec = t_end - t_start
+    mins = sec // 60
+    sec = sec % 60
+    hour = mins // 60
+    mins = mins % 60
+    return hour, mins, sec
 
 def generate_basis(num_sites, total_particles):
     if num_sites == 1:
@@ -52,45 +59,51 @@ def compute_bdag_b_expectation(psi, basis, i, j, compute_label, label_to_index):
                 exp_val += psi[new_index] * psi[idx] * amp_factor
     return exp_val
 
-def compute_reduced_density_matrix(psi, full_basis, A_indices, B_indices, max_particles):
-    reduced_basis_A = generate_reduced_basis(len(A_indices), max_particles)
+def compute_reduced_density_matrix(psi, full_basis, A_indices, B_indices):
+    grupos = {}
+    for idx, state in enumerate(full_basis):
+        a_state = tuple(state[k] for k in A_indices)
+        b_state = tuple(state[k] for k in B_indices)
+        if b_state not in grupos:
+            grupos[b_state] = {}
+        if a_state not in grupos[b_state]:
+            grupos[b_state][a_state] = 0.0 + 0.0j
+        grupos[b_state][a_state] += psi[idx]
+    
+    reduced_basis_A = sorted({a_state for grupo in grupos.values() for a_state in grupo.keys()}, reverse=True)
     A_state_to_index = {state: i for i, state in enumerate(reduced_basis_A)}
     dim_A = len(reduced_basis_A)
     rho_A = np.zeros((dim_A, dim_A), dtype=complex)
-    D_full = len(full_basis)
-    for i in range(D_full):
-        state_i = full_basis[i]
-        a_i = tuple(state_i[k] for k in A_indices)
-        b_i = tuple(state_i[k] for k in B_indices)
-        for j in range(D_full):
-            state_j = full_basis[j]
-            a_j = tuple(state_j[k] for k in A_indices)
-            b_j = tuple(state_j[k] for k in B_indices)
-            if b_i == b_j:
-                rho_A[A_state_to_index[a_i], A_state_to_index[a_j]] += psi[i] * np.conjugate(psi[j])
+    
+    for grupo in grupos.values():
+        for a_state_i, psi_sum_i in grupo.items():
+            i_idx = A_state_to_index[a_state_i]
+            for a_state_j, psi_sum_j in grupo.items():
+                j_idx = A_state_to_index[a_state_j]
+                rho_A[i_idx, j_idx] += psi_sum_i * np.conjugate(psi_sum_j)
+    
     return rho_A, reduced_basis_A
 
 def entanglement_entropy(rho_A):
-    evals, V = np.linalg.eigh(rho_A)
-    ln_D = np.diag([np.log(ev) if ev > 1e-12 else 0.0 for ev in evals])
-    ln_rho_A = V @ ln_D @ V.conj().T
-    S = -np.real(np.trace(rho_A @ ln_rho_A))
+    evals, _ = np.linalg.eigh(rho_A)
+    S = -sum(ev * np.log2(ev) for ev in evals if ev > 1e-12)
     return S
 
-def build_hamiltonian(basis, label_to_index, t, U, mu, M):
+
+# ---------------------------- CONSTRUCCIÓN DEL HAMILTONIANO ----------------------------
+def build_hamiltonian(basis, label_to_index, t, U, mu, M, g_eff, J_B, J_D, epsilon_pert):
     D = len(basis)
-    H = lil_matrix((D, D), dtype=float)
-    # Término diagonal: interacción y potencial químico
+    # Hamiltoniano de Bose-Hubbard (términos locales e hopping)
+    H_b = lil_matrix((D, D), dtype=float)
     for idx, state in enumerate(basis):
         diag_term = 0.5 * sum(n * (n - 1) for n in state)
         chem_term = -mu * sum(state)
-        H[idx, idx] = U * diag_term + chem_term
-    # Término de hopping
+        H_b[idx, idx] = U * diag_term + chem_term
     for idx, state in enumerate(basis):
         state_array = list(state)
         for i in range(M):
             j = (i + 1) % M
-            # b_i† b_j
+            # Término de hopping: b_i† b_j
             if state_array[j] > 0:
                 new_state = state_array.copy()
                 new_state[i] += 1
@@ -99,8 +112,8 @@ def build_hamiltonian(basis, label_to_index, t, U, mu, M):
                 lbl_new = compute_label(tuple(new_state))
                 new_index = label_to_index.get(lbl_new, None)
                 if new_index is not None:
-                    H[new_index, idx] += amp
-            # b_j† b_i
+                    H_b[new_index, idx] += amp
+            # Término de hopping: b_j† b_i
             if state_array[i] > 0:
                 new_state = state_array.copy()
                 new_state[j] += 1
@@ -109,15 +122,70 @@ def build_hamiltonian(basis, label_to_index, t, U, mu, M):
                 lbl_new = compute_label(tuple(new_state))
                 new_index = label_to_index.get(lbl_new, None)
                 if new_index is not None:
-                    H[new_index, idx] += amp
-    return H.tocsr()
+                    H_b[new_index, idx] += amp
+    H_b = H_b.tocsr()
 
-def simulate_t(t_val, basis, label_to_index, A_half, B_half, A_even, B_even, N, M, U, mu):
-    t_val_actual = U * t_val  # t real
-    H_csr = build_hamiltonian(basis, label_to_index, t_val_actual, U, mu, M)
+    # Operador de enlace B:
+    B_op = lil_matrix((D, D), dtype=float)
+    for idx, state in enumerate(basis):
+        state_array = list(state)
+        for i in range(M):
+            j = (i + 1) % M
+            sign = (-1)**i
+            # b_i† b_{i+1}
+            if state_array[j] > 0:
+                new_state = state_array.copy()
+                new_state[i] += 1
+                new_state[j] -= 1
+                amp = sign * sqrt((state_array[i] + 1) * state_array[j])
+                lbl_new = compute_label(tuple(new_state))
+                new_index = label_to_index.get(lbl_new, None)
+                if new_index is not None:
+                    B_op[new_index, idx] += amp
+            # b_{i+1}† b_i
+            if state_array[i] > 0:
+                new_state = state_array.copy()
+                new_state[i] -= 1
+                new_state[j] += 1
+                amp = sign * sqrt((state_array[j] + 1) * state_array[i])
+                lbl_new = compute_label(tuple(new_state))
+                new_index = label_to_index.get(lbl_new, None)
+                if new_index is not None:
+                    B_op[new_index, idx] += amp
+    B_op = B_op.tocsr()
+
+    # Operador de densidad D (con signo alternante)
+    D_op = lil_matrix((D, D), dtype=float)
+    for idx, state in enumerate(basis):
+        D_val = sum(((-1)**i) * n for i, n in enumerate(state))
+        D_op[idx, idx] = D_val
+    D_op = D_op.tocsr()
+
+    # Cálculo de los cuadrados y términos cruzados
+    B2 = B_op.dot(B_op)
+    D2 = D_op.dot(D_op)
+    BD = B_op.dot(D_op)
+    DB = D_op.dot(B_op)
+
+    # Término extra del Hamiltoniano:
+    # H_extra = (g_eff/M)[J_B^2 * B^2 + J_D^2 * D^2 + J_D J_B (B D + D B)]
+    H_extra = (g_eff/M) * ((J_B**2)*B2 + (J_D**2)*D2 + (J_D*J_B)*(BD + DB))
+    
+    # Término perturbativo: H_pert = epsilon_pert * D_op
+    H_pert = epsilon_pert * D_op
+
+    # Hamiltoniano efectivo completo
+    H_eff = H_b + H_extra + H_pert
+    return H_eff
+
+# ---------------------------- SIMULACIÓN ----------------------------
+def simulate_t(t_val, basis, label_to_index, A_half, B_half, A_even, B_even, N, M, U, mu, t_start, g_eff, J_B, J_D, epsilon_pert):
+    t_val_actual = U * t_val
+    H_csr = build_hamiltonian(basis, label_to_index, t_val_actual, U, mu, M, g_eff, J_B, J_D, epsilon_pert)
     eigval, eigvec = eigsh(H_csr, k=1, which='SA')
     psi_ground = eigvec[:, 0] / np.linalg.norm(eigvec[:, 0])
     
+    # Cálculo de expectativas y entropía
     site1 = 0
     site2 = 1
     n1 = compute_expectation(psi_ground, basis, site1, power=1)
@@ -126,8 +194,7 @@ def simulate_t(t_val, basis, label_to_index, A_half, B_half, A_even, B_even, N, 
     n2 = compute_expectation(psi_ground, basis, site2, power=1)
     n2_2 = compute_expectation(psi_ground, basis, site2, power=2)
     var_n2 = n2_2 - n2**2
-    
-    # Factor superfluido
+
     superfluid_sum = 0.0
     for i in range(M):
         j = (i + 1) % M
@@ -135,14 +202,61 @@ def simulate_t(t_val, basis, label_to_index, A_half, B_half, A_even, B_even, N, 
                 compute_bdag_b_expectation(psi_ground, basis, j, i, compute_label, label_to_index))
         superfluid_sum += term
     sf_factor = superfluid_sum / (2 * M)
-    
-    # Entropía de enredamiento para particiones:
-    rho_A_half, _ = compute_reduced_density_matrix(psi_ground, basis, A_half, B_half, N)
+
+    rho_A_half, _ = compute_reduced_density_matrix(psi_ground, basis, A_half, B_half)
     S_half = entanglement_entropy(rho_A_half)
-    rho_A_even, _ = compute_reduced_density_matrix(psi_ground, basis, A_even, B_even, N)
+
+    rho_A_even, _ = compute_reduced_density_matrix(psi_ground, basis, A_even, B_even)
     S_even = entanglement_entropy(rho_A_even)
+
+    # ------------------- CÁLCULO DE LOS PARÁMETROS DE ORDEN -------------------
+    # Reconstrucción de los operadores B y D para el cálculo de <B^2> y <D^2>
+    D_dim = len(basis)
+    # Operador de enlace B:
+    B_op = lil_matrix((D_dim, D_dim), dtype=float)
+    for idx, state in enumerate(basis):
+        state_array = list(state)
+        for i in range(M):
+            j = (i + 1) % M
+            sign = (-1)**i
+            if state_array[j] > 0:
+                new_state = state_array.copy()
+                new_state[i] += 1
+                new_state[j] -= 1
+                amp = sign * sqrt((state_array[i] + 1) * state_array[j])
+                lbl_new = compute_label(tuple(new_state))
+                new_index = label_to_index.get(lbl_new, None)
+                if new_index is not None:
+                    B_op[new_index, idx] += amp
+            if state_array[i] > 0:
+                new_state = state_array.copy()
+                new_state[i] -= 1
+                new_state[j] += 1
+                amp = sign * sqrt((state_array[j] + 1) * state_array[i])
+                lbl_new = compute_label(tuple(new_state))
+                new_index = label_to_index.get(lbl_new, None)
+                if new_index is not None:
+                    B_op[new_index, idx] += amp
+    B_op = B_op.tocsr()
     
-    return [t_val, n1, var_n1, n2, var_n2, sf_factor, S_half, S_even]
+    # Operador de densidad D (con signo alternante)
+    D_op = lil_matrix((D_dim, D_dim), dtype=float)
+    for idx, state in enumerate(basis):
+        D_val = sum(((-1)**i) * n for i, n in enumerate(state))
+        D_op[idx, idx] = D_val
+    D_op = D_op.tocsr()
+    
+    B2 = B_op.dot(B_op)
+    D2 = D_op.dot(D_op)
+    
+    exp_B2 = np.real(psi_ground.conj().dot(B2.dot(psi_ground)))
+    exp_D2 = np.real(psi_ground.conj().dot(D2.dot(psi_ground)))
+    
+    O_B = np.sqrt(exp_B2 / (N**2))
+    O_DW = np.sqrt(exp_D2 / (N**2))
+    
+    # Se retornan además los nuevos parámetros de orden
+    return [t_val, n1, var_n1, n2, var_n2, sf_factor, S_half, S_even, O_B, O_DW]
 
 # ---------------------------- MAIN ----------------------------
 def main():
@@ -151,12 +265,17 @@ def main():
     # Parámetros del modelo
     N = 8          # Número de partículas
     M = 8          # Número de sitios
-    U = 1.0        # Amplitud local
-    mu = 0.0       # Potencial químico
-    num_steps = 2 # Número de puntos a calcular
+    U = 1.0         # Amplitud de interacción local
+    mu = np.sqrt(2)-1        # Potencial químico
+    # Nuevos parámetros para términos extra y perturbativos
+    g_eff = -1.0
+    J_B = 0.0
+    J_D = 2.0
+    epsilon_pert = 1e-4  # Término perturbativo para romper la degeneración en MI
+    num_steps = 10   # Número de puntos a calcular
     t_over_U_vals = np.logspace(-2, 2, num=num_steps)
     
-    # Pre-cálculos comunes: base de Fock completa y mapeo de etiquetas
+    # Pre-cálculos: base de Fock y mapeo de etiquetas
     all_states = generate_basis(M, N)
     basis = sorted(all_states, reverse=True)
     D = len(basis)
@@ -173,27 +292,24 @@ def main():
     A_even = list(range(0, M, 2))
     B_even = list(range(1, M, 2))
 
-    
-    # función paralela para cada t/U
+    # Función parcial para simulación paralela
     simulate_func = partial(simulate_t, basis=basis, label_to_index=label_to_index,
                             A_half=A_half, B_half=B_half, A_even=A_even, B_even=B_even,
-                            N=N, M=M, U=U, mu=mu)
+                            N=N, M=M, U=U, mu=mu, t_start=t_start,
+                            g_eff=g_eff, J_B=J_B, J_D=J_D, epsilon_pert=epsilon_pert)
     
-    # Ejecutar en paralelo 
     with ProcessPoolExecutor() as executor:
         results = list(executor.map(simulate_func, t_over_U_vals))
     
     results = np.array(results)
     t_end = time.time()
-    sec = t_end - t_start
-    mins = sec // 60
-    sec = sec % 60
-    hour = mins // 60
-    mins = mins % 60
+    hour, mins, sec = partial_time(t_start, t_end)
     
-    # Guardar resultados
-    metadata = f"# N = {N}\n# M = {M}\n# D = {D}\n# mu = {mu}\n# Computation time = {hour}:{mins}:{sec} \n"
-    header = "t_U\tn1\tvar_n1\tn2\tvar_n2\tsf_factor\tS_half\tS_even"
+    # Guardar resultados (se añaden los nuevos parámetros de orden)
+    metadata = (f"# N = {N}\n# M = {M}\n# D = {D}\n# mu = {mu}\n"
+                f"# g_eff = {g_eff}\n# J_B = {J_B}\n# J_D = {J_D}\n"
+                f"# epsilon_pert = {epsilon_pert}\n# Tiempo de cómputo = {hour}:{mins}:{sec}\n")
+    header = "t_U\tn1\tvar_n1\tn2\tvar_n2\tsf_factor\tS_half\tS_even\tO_B\tO_DW"
     output_filename = "results.txt"
     with open(output_filename, "w") as f:
         f.write(metadata)
