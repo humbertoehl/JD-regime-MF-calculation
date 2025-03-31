@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Leer el archivo y filtrar las líneas de metadatos (comentarios)
-with open("results.txt", "r") as f:
+with open("resultsJBJD8.txt", "r") as f:
     lines = [line for line in f if not line.startswith("#")]
 
 # Usamos np.genfromtxt sobre las líneas filtradas
@@ -28,7 +28,7 @@ plt.semilogx(t_over_U, n2, marker='^', label="n2")
 plt.semilogx(t_over_U, var_n2, marker='v', label="var_n2")
 plt.semilogx(t_over_U, sf_factor, marker='d', label="sf_factor")
 plt.semilogx(t_over_U, S_half, marker='*', label="S_half")
-#plt.semilogx(t_over_U, S_even, marker='x', label="S_even")
+plt.semilogx(t_over_U, S_even, marker='x', label="S_even")
 plt.semilogx(t_over_U, O_B, marker='p', label="O_B")
 plt.semilogx(t_over_U, O_DW, marker='h', label="O_DW")
 

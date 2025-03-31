@@ -76,11 +76,22 @@ def compute_reduced_density_matrix(psi, full_basis, A_indices, B_indices):
     rho_A = np.zeros((dim_A, dim_A), dtype=complex)
     
     for grupo in grupos.values():
-        for a_state_i, psi_sum_i in grupo.items():
+        keys = list(grupo.keys())
+        for i in range(len(keys)):
+            a_state_i = keys[i]
+            psi_sum_i = grupo[a_state_i]
             i_idx = A_state_to_index[a_state_i]
-            for a_state_j, psi_sum_j in grupo.items():
+            # Contribución diagonal
+            rho_A[i_idx, i_idx] += psi_sum_i * np.conjugate(psi_sum_i)
+            # Solo para i < j, aprovechando la simetría
+            for j in range(i + 1, len(keys)):
+                a_state_j = keys[j]
+                psi_sum_j = grupo[a_state_j]
                 j_idx = A_state_to_index[a_state_j]
-                rho_A[i_idx, j_idx] += psi_sum_i * np.conjugate(psi_sum_j)
+                contrib = psi_sum_i * np.conjugate(psi_sum_j)
+                rho_A[i_idx, j_idx] += contrib
+                rho_A[j_idx, i_idx] += np.conjugate(contrib)
+
     
     return rho_A, reduced_basis_A
 
@@ -269,11 +280,11 @@ def main():
     mu = np.sqrt(2)-1        # Potencial químico
     # Nuevos parámetros para términos extra y perturbativos
     g_eff = -1.0
-    J_B = 0.0
+    J_B = 0.5
     J_D = 2.0
-    epsilon_pert = 1e-4  # Término perturbativo para romper la degeneración en MI
-    num_steps = 10   # Número de puntos a calcular
-    t_over_U_vals = np.logspace(-2, 2, num=num_steps)
+    epsilon_pert = 1e-4*0  # Término perturbativo para romper la degeneración en MI
+    num_steps = 35   # Número de puntos a calcular
+    t_over_U_vals = np.logspace(-3, 2.5, num=num_steps)
     
     # Pre-cálculos: base de Fock y mapeo de etiquetas
     all_states = generate_basis(M, N)
@@ -298,7 +309,7 @@ def main():
                             N=N, M=M, U=U, mu=mu, t_start=t_start,
                             g_eff=g_eff, J_B=J_B, J_D=J_D, epsilon_pert=epsilon_pert)
     
-    with ProcessPoolExecutor() as executor:
+    with ProcessPoolExecutor(max_workers=3) as executor:
         results = list(executor.map(simulate_func, t_over_U_vals))
     
     results = np.array(results)
@@ -310,7 +321,7 @@ def main():
                 f"# g_eff = {g_eff}\n# J_B = {J_B}\n# J_D = {J_D}\n"
                 f"# epsilon_pert = {epsilon_pert}\n# Tiempo de cómputo = {hour}:{mins}:{sec}\n")
     header = "t_U\tn1\tvar_n1\tn2\tvar_n2\tsf_factor\tS_half\tS_even\tO_B\tO_DW"
-    output_filename = "results.txt"
+    output_filename = "resultsJBJD8.txt"
     with open(output_filename, "w") as f:
         f.write(metadata)
         f.write(header + "\n")
