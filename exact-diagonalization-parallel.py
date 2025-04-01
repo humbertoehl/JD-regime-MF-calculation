@@ -2,6 +2,7 @@ import numpy as np
 import time
 from math import factorial, sqrt
 from scipy.sparse import lil_matrix
+from scipy.sparse import coo_matrix
 from scipy.sparse.linalg import eigsh
 from concurrent.futures import ProcessPoolExecutor
 from functools import partial
@@ -103,18 +104,32 @@ def entanglement_entropy(rho_A):
 
 # ---------------------------- CONSTRUCCIÓN DEL HAMILTONIANO ----------------------------
 def build_hamiltonian(basis, label_to_index, t, U, mu, M, g_eff, J_B, J_D, epsilon_pert):
+    import numpy as np
+    from math import sqrt
+    from scipy.sparse import coo_matrix
+
     D = len(basis)
-    # Hamiltoniano de Bose-Hubbard (términos locales e hopping)
-    H_b = lil_matrix((D, D), dtype=float)
+
+    # --- Construcción de H_b: Hamiltoniano de Bose-Hubbard ---
+    rows_hb = []
+    cols_hb = []
+    data_hb = []
+    
+    # Términos diagonales
     for idx, state in enumerate(basis):
         diag_term = 0.5 * sum(n * (n - 1) for n in state)
         chem_term = -mu * sum(state)
-        H_b[idx, idx] = U * diag_term + chem_term
+        value = U * diag_term + chem_term
+        rows_hb.append(idx)
+        cols_hb.append(idx)
+        data_hb.append(value)
+    
+    # Términos de hopping: b_i† b_j y b_j† b_i
     for idx, state in enumerate(basis):
         state_array = list(state)
         for i in range(M):
             j = (i + 1) % M
-            # Término de hopping: b_i† b_j
+            # b_i† b_j
             if state_array[j] > 0:
                 new_state = state_array.copy()
                 new_state[i] += 1
@@ -123,8 +138,10 @@ def build_hamiltonian(basis, label_to_index, t, U, mu, M, g_eff, J_B, J_D, epsil
                 lbl_new = compute_label(tuple(new_state))
                 new_index = label_to_index.get(lbl_new, None)
                 if new_index is not None:
-                    H_b[new_index, idx] += amp
-            # Término de hopping: b_j† b_i
+                    rows_hb.append(new_index)
+                    cols_hb.append(idx)
+                    data_hb.append(amp)
+            # b_j† b_i
             if state_array[i] > 0:
                 new_state = state_array.copy()
                 new_state[j] += 1
@@ -133,16 +150,22 @@ def build_hamiltonian(basis, label_to_index, t, U, mu, M, g_eff, J_B, J_D, epsil
                 lbl_new = compute_label(tuple(new_state))
                 new_index = label_to_index.get(lbl_new, None)
                 if new_index is not None:
-                    H_b[new_index, idx] += amp
-    H_b = H_b.tocsr()
+                    rows_hb.append(new_index)
+                    cols_hb.append(idx)
+                    data_hb.append(amp)
+    
+    H_b = coo_matrix((data_hb, (rows_hb, cols_hb)), shape=(D, D), dtype=float).tocsr()
 
-    # Operador de enlace B:
-    B_op = lil_matrix((D, D), dtype=float)
+    # --- Construcción del operador de enlace B ---
+    rows_B = []
+    cols_B = []
+    data_B = []
+    
     for idx, state in enumerate(basis):
         state_array = list(state)
         for i in range(M):
             j = (i + 1) % M
-            sign = (-1)**i
+            sign = (-1) ** i
             # b_i† b_{i+1}
             if state_array[j] > 0:
                 new_state = state_array.copy()
@@ -152,7 +175,9 @@ def build_hamiltonian(basis, label_to_index, t, U, mu, M, g_eff, J_B, J_D, epsil
                 lbl_new = compute_label(tuple(new_state))
                 new_index = label_to_index.get(lbl_new, None)
                 if new_index is not None:
-                    B_op[new_index, idx] += amp
+                    rows_B.append(new_index)
+                    cols_B.append(idx)
+                    data_B.append(amp)
             # b_{i+1}† b_i
             if state_array[i] > 0:
                 new_state = state_array.copy()
@@ -162,32 +187,43 @@ def build_hamiltonian(basis, label_to_index, t, U, mu, M, g_eff, J_B, J_D, epsil
                 lbl_new = compute_label(tuple(new_state))
                 new_index = label_to_index.get(lbl_new, None)
                 if new_index is not None:
-                    B_op[new_index, idx] += amp
-    B_op = B_op.tocsr()
+                    rows_B.append(new_index)
+                    cols_B.append(idx)
+                    data_B.append(amp)
+    
+    B_op = coo_matrix((data_B, (rows_B, cols_B)), shape=(D, D), dtype=float).tocsr()
 
-    # Operador de densidad D (con signo alternante)
-    D_op = lil_matrix((D, D), dtype=float)
+    # --- Construcción del operador de densidad D (con signo alternante) ---
+    rows_D = []
+    cols_D = []
+    data_D = []
+    
     for idx, state in enumerate(basis):
-        D_val = sum(((-1)**i) * n for i, n in enumerate(state))
-        D_op[idx, idx] = D_val
-    D_op = D_op.tocsr()
+        D_val = sum(((-1) ** i) * n for i, n in enumerate(state))
+        rows_D.append(idx)
+        cols_D.append(idx)
+        data_D.append(D_val)
+    
+    D_op = coo_matrix((data_D, (rows_D, cols_D)), shape=(D, D), dtype=float).tocsr()
 
-    # Cálculo de los cuadrados y términos cruzados
+    # --- Cálculo de los cuadrados y términos cruzados ---
     B2 = B_op.dot(B_op)
     D2 = D_op.dot(D_op)
     BD = B_op.dot(D_op)
     DB = D_op.dot(B_op)
 
-    # Término extra del Hamiltoniano:
+    # --- Término extra del Hamiltoniano ---
     # H_extra = (g_eff/M)[J_B^2 * B^2 + J_D^2 * D^2 + J_D J_B (B D + D B)]
-    H_extra = (g_eff/M) * ((J_B**2)*B2 + (J_D**2)*D2 + (J_D*J_B)*(BD + DB))
+    H_extra = (g_eff / M) * ((J_B ** 2) * B2 + (J_D ** 2) * D2 + (J_D * J_B) * (BD + DB))
     
-    # Término perturbativo: H_pert = epsilon_pert * D_op
+    # --- Término perturbativo ---
     H_pert = epsilon_pert * D_op
 
-    # Hamiltoniano efectivo completo
+    # --- Hamiltoniano efectivo final ---
     H_eff = H_b + H_extra + H_pert
+
     return H_eff
+
 
 # ---------------------------- SIMULACIÓN ----------------------------
 def simulate_t(t_val, basis, label_to_index, A_half, B_half, A_even, B_even, N, M, U, mu, t_start, g_eff, J_B, J_D, epsilon_pert):
@@ -279,12 +315,12 @@ def main():
     U = 1.0         # Amplitud de interacción local
     mu = np.sqrt(2)-1        # Potencial químico
     # Nuevos parámetros para términos extra y perturbativos
-    g_eff = -1.0
-    J_B = 0.5
-    J_D = 2.0
-    epsilon_pert = 1e-4*0  # Término perturbativo para romper la degeneración en MI
-    num_steps = 35   # Número de puntos a calcular
-    t_over_U_vals = np.logspace(-3, 2.5, num=num_steps)
+    g_eff = -1
+    J_B = 0
+    J_D = 0
+    epsilon_pert = 1e-5  # Término perturbativo para romper la degeneración en MI
+    num_steps = 15   # Número de puntos a calcular
+    t_over_U_vals = np.logspace(-2, 2.3, num=num_steps)
     
     # Pre-cálculos: base de Fock y mapeo de etiquetas
     all_states = generate_basis(M, N)
@@ -321,7 +357,7 @@ def main():
                 f"# g_eff = {g_eff}\n# J_B = {J_B}\n# J_D = {J_D}\n"
                 f"# epsilon_pert = {epsilon_pert}\n# Tiempo de cómputo = {hour}:{mins}:{sec}\n")
     header = "t_U\tn1\tvar_n1\tn2\tvar_n2\tsf_factor\tS_half\tS_even\tO_B\tO_DW"
-    output_filename = "resultsJBJD8.txt"
+    output_filename = "results.txt"
     with open(output_filename, "w") as f:
         f.write(metadata)
         f.write(header + "\n")
