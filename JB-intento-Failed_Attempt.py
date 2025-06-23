@@ -223,15 +223,15 @@ def plot_phase_diagram(t0_range, mu_range, resolution, N_cond=N_cond):
             # Se prueban varias condiciones iniciales para buscar el mínimo de energía. Paso esencial, pues el sistema tiene muchos mínimos locales
             for _ in range(N_cond):
                 sign = np.random.choice([1,-1])
-                psi_1_0 = (np.random.uniform(0, 0.4) + 0.0001j)* sign
-                psi_2_0 = (np.random.uniform(0, 0.4) + 0.0001j)* sign
-                psi_3_0 = (np.random.uniform(0, 0.4) + 0.0001j)* sign * (-1)
-                psi_4_0 = (np.random.uniform(0, 0.4) + 0.0001j)* sign * (-1)
+                psi_1_0 = (np.random.uniform(0, 0.1) + 0.0001j)
+                psi_2_0 = (np.random.uniform(0, 0.1) + 0.0001j)
+                psi_3_0 = (np.random.uniform(0, 0.1) + 0.0001j)* sign * (-1)
+                psi_4_0 = (np.random.uniform(0, 0.1) + 0.0001j)* sign * (-1)
 
-                rho_1_0 = np.random.uniform(0, 1.3)
-                rho_2_0 = np.random.uniform(0, 1.3)
-                rho_3_0 = np.random.uniform(0, 1.3)
-                rho_4_0 = np.random.uniform(0, 1.3)
+                rho_1_0 = np.random.uniform(0, 1.9)
+                rho_2_0 = np.random.uniform(0, 1.9)
+                rho_3_0 = np.random.uniform(0, 1.9)
+                rho_4_0 = np.random.uniform(0, 1.9)
                 
                 psi_1, psi_2, psi_3, psi_4,rho_1, rho_2, rho_3, rho_4, energy = fixed_point_iteration(t0, mu, psi_1_0, psi_2_0, psi_3_0, psi_4_0, rho_1_0, rho_2_0, rho_3_0, rho_4_0)
                 
