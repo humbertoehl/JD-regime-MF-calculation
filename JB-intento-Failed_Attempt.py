@@ -7,10 +7,12 @@ from matplotlib.cm import ScalarMappable
 # Parámetros globales
 Ns    = 100
 z     = 6
-J_B   = 0
+J_B   = 0.05
 U     = 1.0
 g_eff = -0.25
 n_max = 5
+resolution = 20
+N_cond = 16
 
 def create_annihilation(n_max):
     a = np.zeros((n_max, n_max))
@@ -41,12 +43,20 @@ def cross(psi_i, psi_j, sqrd):
 def create_beta_op(psi_local, psi_neighbor):
     return  psi_neighbor * (a_op + adag_op - psi_local * Id)
 
+def beta_local(xi, psi):
+    # psi: lista [psi1,psi2,psi3,psi4]
+    ip1 = (xi % 4)
+    psi_i, psi_ip1 = psi[xi], psi[ip1]
+    return (psi_i.conjugate()*a_op + psi_ip1.conjugate()*a_op
+            + psi_ip1*adag_op + psi_i*adag_op
+            - (psi_i.conjugate()*psi_ip1 + (psi_i.conjugate()*psi_ip1).conjugate())*Id)
+
 def build_hamiltonian(t_xi, mu, beta_xi, delta_s2_xi, tilde_c_xi):
     
-    term_hopping  = (z) * t_xi * beta_xi
+    term_hopping  = -(z/2) * t_xi * beta_xi
     term_mu       = - mu * n_op
     term_U        = (U/2) * n_n_minus_one
-    term_delta_s2 = g_eff *  J_B**2 * delta_s2_xi 
+    term_delta_s2 = g_eff *  J_B**2 * delta_s2_xi *0
     term_const    = - g_eff * Ns * J_B**2 * tilde_c_xi * Id
     H_local = term_hopping + term_mu + term_U + term_delta_s2 + term_const
     return H_local * Ns/4.0
@@ -118,20 +128,25 @@ def fixed_point_iteration(t0, mu, psi_1, psi_2, psi_3, psi_4, rho_1, rho_2, rho_
         tilde_eta_3 = (z/8) *sum_eta
         tilde_eta_4 = -(z/8) *sum_eta
 
-        t_1 = t0 - g_eff * (Ns) * J_B**2 * tilde_eta_1*.5
-        t_2 = t0 - g_eff * (Ns) * J_B**2 * tilde_eta_2*.5
-        t_3 = t0 - g_eff * (Ns) * J_B**2 * tilde_eta_3*.5
-        t_4 = t0 - g_eff * (Ns) * J_B**2 * tilde_eta_4*.5
+        t_1 = t0 - g_eff * (Ns) * J_B**2 * tilde_eta_1
+        t_2 = t0 - g_eff * (Ns) * J_B**2 * tilde_eta_2
+        t_3 = t0 - g_eff * (Ns) * J_B**2 * tilde_eta_3
+        t_4 = t0 - g_eff * (Ns) * J_B**2 * tilde_eta_4
 
         tilde_c_1 = (z/4) * (psi_1.conjugate()*psi_2 +psi_2.conjugate()*psi_1) * tilde_eta_1
         tilde_c_2 = (z/4) * (psi_2.conjugate()*psi_3 +psi_3.conjugate()*psi_2) * tilde_eta_2
         tilde_c_3 = (z/4) * (psi_3.conjugate()*psi_4 +psi_4.conjugate()*psi_3) * tilde_eta_3
         tilde_c_4 = (z/4) * (psi_4.conjugate()*psi_1 +psi_1.conjugate()*psi_4) * tilde_eta_4
         
-        beta_1 = create_beta_op(psi_1, psi_2)
-        beta_2 = create_beta_op(psi_2, psi_3)
-        beta_3 = create_beta_op(psi_3, psi_4)
-        beta_4 = create_beta_op(psi_4, psi_1)
+
+        psi = [psi_1,psi_2,psi_3,psi_4]
+        beta_1 = beta_local(0, psi)
+        beta_2 = beta_local(1, psi)
+        beta_3 = beta_local(2, psi)
+        beta_4 = beta_local(3, psi)
+
+
+
 
         delta_s2_1 = create_delsa_s2_op(beta_1, psi_1, psi_2, psi_4, rho_1, rho_2, rho_4)
         delta_s2_2 = create_delsa_s2_op(beta_2, psi_2, psi_3, psi_1, rho_2, rho_3, rho_1)
@@ -183,14 +198,16 @@ def fixed_point_iteration(t0, mu, psi_1, psi_2, psi_3, psi_4, rho_1, rho_2, rho_
 
     return psi_1, psi_2, psi_3, psi_4,rho_1, rho_2, rho_3, rho_4, energy
 
-def plot_phase_diagram(t0_range, mu_range, resolution, N_cond=15):
+def plot_phase_diagram(t0_range, mu_range, resolution, N_cond=N_cond):
     t0_values = np.linspace(*t0_range, resolution)
     mu_values = np.linspace(*mu_range, resolution)
 
     total_psi_matrix = np.zeros((resolution, resolution))
     dimer_imbalance_matrix = np.zeros((resolution, resolution))
+    dimer_imbalance_matrix2 = np.zeros((resolution, resolution))
     avg_density_matrix = np.zeros((resolution, resolution))
     phase_diff_matrix = np.zeros((resolution, resolution))
+    phase_diff_matrix2 = np.zeros((resolution, resolution))
 
     for i, t0 in enumerate(t0_values):
         for j, mu in enumerate(mu_values):
@@ -198,21 +215,23 @@ def plot_phase_diagram(t0_range, mu_range, resolution, N_cond=15):
             min_energy = np.inf
             best_total_psi = None
             best_dimer_imbalance = None
+            best_dimer_imbalance2 = None
             best_avg_density = None
             best_phase_diff = None
+            best_phase_diff2 = None
 
             # Se prueban varias condiciones iniciales para buscar el mínimo de energía. Paso esencial, pues el sistema tiene muchos mínimos locales
             for _ in range(N_cond):
-                sign = np.random.choice([-1,1])
-                psi_1_0 = np.random.uniform(0, 0.2) * sign
-                psi_2_0 = np.random.uniform(0, 0.2) * sign
-                psi_3_0 = psi_1_0 * sign
-                psi_4_0 = psi_2_0 * sign
+                sign = np.random.choice([1,-1])
+                psi_1_0 = (np.random.uniform(0, 0.4) + 0.0001j)* sign
+                psi_2_0 = (np.random.uniform(0, 0.4) + 0.0001j)* sign
+                psi_3_0 = (np.random.uniform(0, 0.4) + 0.0001j)* sign * (-1)
+                psi_4_0 = (np.random.uniform(0, 0.4) + 0.0001j)* sign * (-1)
 
-                rho_1_0 = np.random.uniform(0, 1.1)
-                rho_2_0 = np.random.uniform(0, 1.1)
-                rho_3_0 = np.random.uniform(0, 1.1)
-                rho_4_0 = np.random.uniform(0, 1.1)
+                rho_1_0 = np.random.uniform(0, 1.3)
+                rho_2_0 = np.random.uniform(0, 1.3)
+                rho_3_0 = np.random.uniform(0, 1.3)
+                rho_4_0 = np.random.uniform(0, 1.3)
                 
                 psi_1, psi_2, psi_3, psi_4,rho_1, rho_2, rho_3, rho_4, energy = fixed_point_iteration(t0, mu, psi_1_0, psi_2_0, psi_3_0, psi_4_0, rho_1_0, rho_2_0, rho_3_0, rho_4_0)
                 
@@ -221,17 +240,23 @@ def plot_phase_diagram(t0_range, mu_range, resolution, N_cond=15):
 
                     best_total_psi = (np.abs(psi_1)+np.abs(psi_2)+np.abs(psi_3)+np.abs(psi_4))/4
                     best_dimer_imbalance = abs(rho_1 + rho_2 - rho_3 - rho_4)/4
+                    best_dimer_imbalance2 = abs(rho_1 + rho_3 - rho_1 - rho_4)/4
                     best_avg_density = (rho_1 + rho_2 + rho_3 + rho_4)/4
-                    best_phase_diff = abs(np.angle(psi_3)-np.angle(psi_2))
+                    best_phase_diff = abs(np.angle(psi_3)+np.angle(psi_4)-np.angle(psi_2)-np.angle(psi_1))/2
+                    best_phase_diff2 = abs(np.angle(psi_4)+np.angle(psi_2)-np.angle(psi_3)-np.angle(psi_1))/2
                     if abs(best_phase_diff-2*np.pi)<.1:
                         best_phase_diff=0
 
             print(f"({z*t0:.2f},{mu:.2f}) => psi_t = {best_total_psi:.2f}, Drho = {best_dimer_imbalance:.2f}, rho_avg = {best_avg_density:.2f}, DPhi = {best_phase_diff:.2f}")
             #print(f"{np.real(psi_1):.2f} {np.angle(psi_1):.1f},{np.real(psi_2):.2f} {np.angle(psi_2):.1f},{np.real(psi_3):.2f} {np.angle(psi_3):.1f},{np.real(psi_4):.2f} {np.angle(psi_4):.1f} | {rho_1:.2f},{rho_2:.2f},{rho_3:.2f},{rho_4:.2f}")
+            print(f"densidades: ({rho_1:.3f}) ({rho_2:.3f}) ({rho_3:.3f}) ({rho_4:.3f})")
+            #print(f"Fases: ({np.angle(psi_1):.1f}) ({np.angle(psi_2):.1f}) ({np.angle(psi_3):.1f}) ({np.angle(psi_4):.1f})")
             total_psi_matrix[j, i] = best_total_psi
             dimer_imbalance_matrix[j, i] = best_dimer_imbalance
+            dimer_imbalance_matrix2[j, i] = best_dimer_imbalance2
             avg_density_matrix[j, i] = best_avg_density
             phase_diff_matrix[j, i] = best_phase_diff
+            phase_diff_matrix2[j, i] = best_phase_diff2
 
     # Gráfica de total_psi
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -253,6 +278,16 @@ def plot_phase_diagram(t0_range, mu_range, resolution, N_cond=15):
     ax.set_title('dimer_imbalance', fontsize=16)
     fig.colorbar(c, ax=ax, label='dimer_imbalance')
 
+        # Gráfica de dimer_imbalance2
+    fig, ax = plt.subplots(figsize=(8, 6))
+    norm = Normalize(vmin=np.min(dimer_imbalance_matrix2), vmax=np.max(dimer_imbalance_matrix2))
+    cbar = ScalarMappable(norm=norm, cmap='viridis')
+    c = ax.pcolormesh(z*t0_values, mu_values, dimer_imbalance_matrix2, shading='auto', norm=norm)
+    ax.set_xlabel('zt0', fontsize=14)
+    ax.set_ylabel('mu', fontsize=14)
+    ax.set_title('dimer_imbalance2', fontsize=16)
+    fig.colorbar(c, ax=ax, label='dimer_imbalance2')
+
     # Gráfica de  avg_density
     fig, ax = plt.subplots(figsize=(8, 6))
     norm = Normalize(vmin=np.min( avg_density_matrix), vmax=np.max( avg_density_matrix))
@@ -272,6 +307,16 @@ def plot_phase_diagram(t0_range, mu_range, resolution, N_cond=15):
     ax.set_ylabel('mu', fontsize=14)
     ax.set_title('phase_diff', fontsize=16)
     fig.colorbar(c, ax=ax, label='phase_diff')
+
+    # Gráfica de phase_diff
+    fig, ax = plt.subplots(figsize=(8, 6))
+    norm = Normalize(vmin=np.min(phase_diff_matrix2), vmax=np.max(phase_diff_matrix2))
+    cbar = ScalarMappable(norm=norm, cmap='viridis')
+    c = ax.pcolormesh(z*t0_values, mu_values, phase_diff_matrix2, shading='auto', norm=norm)
+    ax.set_xlabel('zt0', fontsize=14)
+    ax.set_ylabel('mu', fontsize=14)
+    ax.set_title('phase_diff2', fontsize=16)
+    fig.colorbar(c, ax=ax, label='phase_diff2')
     plt.show()
 
 
@@ -424,7 +469,6 @@ def multipoints():
     t0_range = (0, .3/z)
     mu_range = (0, 3)
     rho_range = (0.1, 3)
-    resolution = 16
 
     plot_phase_diagram(t0_range, mu_range, resolution)
     #plot_phase_diagram_rho(t0_range, rho_range, resolution, mu_bounds=(-2.0, 5.0), N_cond=8)
